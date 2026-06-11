@@ -1,0 +1,206 @@
+{
+    "name": "updated_master",
+    "properties": {
+        "activities": [
+            {
+                "name": "Lookup1",
+                "type": "Lookup",
+                "dependsOn": [],
+                "policy": {
+                    "timeout": "0.12:00:00",
+                    "retry": 0,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "source": {
+                        "type": "SqlServerSource",
+                        "sqlReaderQuery": {
+                            "value": "@concat(\n'\nSELECT \n    M.TableName,\n    M.SourceDB,\n    M.SourceSchema,\n    M.SourceTable,\n    M.TargetSchema,\n    M.StagingTable,\n    M.LoadType,\n    M.WatermarkColumn,\n    M.DependencyOrder,\n    M.StoredProcedureName,\n    M.PipelineName,\n    M.ProcessOrder,\n    M.RunMode,\n    M.StagingSchema,\n    M.PrimaryKeyColumn,\n\n    M.ScheduleCode AS MetadataScheduleCode,   -- ✅ renamed\n    S.ScheduleCode AS ScheduleCode,           -- ✅ keep only one \"ScheduleCode\"\n    S.is_active,\n    S.belong_DB\n\nFROM final_schema.MetaData_Config AS M\nJOIN final_schema.Schedule_Codes AS S\n    ON S.ScheduleCode = M.ScheduleCode\n\nWHERE \n    S.is_active = 1\n    AND M.IsActive = 1\n',\n\nif(\n    empty(pipeline().parameters.TableList),\n    \n    if(\n        empty(pipeline().parameters.ScCode),\n        '',\n        concat(\n            ' AND M.ScheduleCode = ''',\n            pipeline().parameters.ScCode,\n            ''''\n        )\n    ),\n\n    concat(\n        ' AND M.TableName IN (''',\n        join(\n            split(\n                replace(pipeline().parameters.TableList, ' ', ''),\n                ','\n            ),\n            ''','''\n        ),\n        ''')'\n    )\n),\n\n' ORDER BY M.DependencyOrder'\n)",
+                            "type": "Expression"
+                        },
+                        "partitionOption": "None"
+                    },
+                    "dataset": {
+                        "referenceName": "metadata_ds",
+                        "type": "DatasetReference"
+                    },
+                    "firstRowOnly": false
+                }
+            },
+            {
+                "name": "ForEach1",
+                "type": "ForEach",
+                "dependsOn": [
+                    {
+                        "activity": "Lookup1",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "userProperties": [],
+                "typeProperties": {
+                    "items": {
+                        "value": "@activity('Lookup1').output.value",
+                        "type": "Expression"
+                    },
+                    "isSequential": true,
+                    "activities": [
+                        {
+                            "name": "Switch1",
+                            "type": "Switch",
+                            "dependsOn": [],
+                            "userProperties": [],
+                            "typeProperties": {
+                                "on": {
+                                    "value": "@item().ScheduleCode",
+                                    "type": "Expression"
+                                },
+                                "cases": [
+                                    {
+                                        "value": "SC01",
+                                        "activities": [
+                                            {
+                                                "name": "Execute_DB1",
+                                                "type": "ExecutePipeline",
+                                                "dependsOn": [],
+                                                "policy": {
+                                                    "secureInput": false
+                                                },
+                                                "userProperties": [],
+                                                "typeProperties": {
+                                                    "pipeline": {
+                                                        "referenceName": "DB_1_PIPE",
+                                                        "type": "PipelineReference"
+                                                    },
+                                                    "waitOnCompletion": true,
+                                                    "parameters": {
+                                                        "p_TableName": {
+                                                            "value": "@item().TableName",
+                                                            "type": "Expression"
+                                                        },
+                                                        "p_SourceDB": {
+                                                            "value": "@item().SourceDB",
+                                                            "type": "Expression"
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "value": "SC02",
+                                        "activities": [
+                                            {
+                                                "name": "Execute_DB2",
+                                                "type": "ExecutePipeline",
+                                                "dependsOn": [],
+                                                "policy": {
+                                                    "secureInput": false
+                                                },
+                                                "userProperties": [],
+                                                "typeProperties": {
+                                                    "pipeline": {
+                                                        "referenceName": "DB_2_PIPE",
+                                                        "type": "PipelineReference"
+                                                    },
+                                                    "waitOnCompletion": true,
+                                                    "parameters": {
+                                                        "p_TableName": {
+                                                            "value": "@item().TableName",
+                                                            "type": "Expression"
+                                                        },
+                                                        "p_SourceDB": {
+                                                            "value": "@item().SourceDB",
+                                                            "type": "Expression"
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "value": "SC03",
+                                        "activities": [
+                                            {
+                                                "name": "Execute_DB3",
+                                                "type": "ExecutePipeline",
+                                                "dependsOn": [],
+                                                "policy": {
+                                                    "secureInput": false
+                                                },
+                                                "userProperties": [],
+                                                "typeProperties": {
+                                                    "pipeline": {
+                                                        "referenceName": "DB_3_PIPE",
+                                                        "type": "PipelineReference"
+                                                    },
+                                                    "waitOnCompletion": true,
+                                                    "parameters": {
+                                                        "p_TableName": {
+                                                            "value": "@item().TableName",
+                                                            "type": "Expression"
+                                                        },
+                                                        "p_SourceDB": {
+                                                            "value": "@item().SourceDB",
+                                                            "type": "Expression"
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "value": "SC04",
+                                        "activities": [
+                                            {
+                                                "name": "Execute_DB4",
+                                                "type": "ExecutePipeline",
+                                                "dependsOn": [],
+                                                "policy": {
+                                                    "secureInput": false
+                                                },
+                                                "userProperties": [],
+                                                "typeProperties": {
+                                                    "pipeline": {
+                                                        "referenceName": "DB_4_PIPE",
+                                                        "type": "PipelineReference"
+                                                    },
+                                                    "waitOnCompletion": true,
+                                                    "parameters": {
+                                                        "p_TableName": {
+                                                            "value": "@item().TableName",
+                                                            "type": "Expression"
+                                                        },
+                                                        "p_SourceDB": {
+                                                            "value": "@item().SourceDB",
+                                                            "type": "Expression"
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            }
+        ],
+        "parameters": {
+            "TableList": {
+                "type": "string"
+            },
+            "ScCode": {
+                "type": "string"
+            }
+        },
+        "annotations": [],
+        "lastPublishTime": "2026-05-04T09:58:26Z"
+    },
+    "type": "Microsoft.DataFactory/factories/pipelines"
+}
