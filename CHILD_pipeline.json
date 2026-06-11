@@ -1,0 +1,340 @@
+{
+    "name": "DB_1_PIPE",
+    "properties": {
+        "activities": [
+            {
+                "name": "LKP_Metadata",
+                "type": "Lookup",
+                "dependsOn": [],
+                "policy": {
+                    "retry": 0,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "source": {
+                        "type": "AzureSqlSource",
+                        "sqlReaderQuery": {
+                            "value": "@concat(\n'\nSELECT \n    M.TableName,\n    M.SourceDB,\n    M.SourceSchema,\n    M.SourceTable,\n    M.TargetSchema,\n    M.StagingTable,\n    M.LoadType,\n    M.WatermarkColumn,\n    M.DependencyOrder,\n    M.StoredProcedureName,\n    M.PipelineName,\n    M.ProcessOrder,\n    M.RunMode,\n    M.StagingSchema,\n    M.PrimaryKeyColumn,\n    M.ScheduleCode AS MetadataScheduleCode,\n\n    S.ScheduleCode AS ScheduleCode,\n    S.is_active,\n    S.belong_DB\n\nFROM final_schema.metadata_config AS M\nJOIN final_schema.Schedule_Codes AS S\n    ON S.ScheduleCode = M.ScheduleCode\n\nWHERE S.is_active = 1 \n  AND M.IsActive = 1\n',\nif(\n    empty(pipeline().parameters.TableList),\n    ' AND M.ScheduleCode = ''SC01'' ',\n    concat(\n        ' AND M.TableName IN (''',\n        join(\n            split(pipeline().parameters.TableList, ','),\n            ''','''\n        ),\n        ''')'\n    )\n),\n' ORDER BY M.DependencyOrder'\n)",
+                            "type": "Expression"
+                        },
+                        "partitionOption": "None"
+                    },
+                    "dataset": {
+                        "referenceName": "metadata_ds",
+                        "type": "DatasetReference"
+                    },
+                    "firstRowOnly": false
+                }
+            },
+            {
+                "name": "ForEach_Tables",
+                "type": "ForEach",
+                "dependsOn": [
+                    {
+                        "activity": "LKP_Metadata",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "userProperties": [],
+                "typeProperties": {
+                    "items": {
+                        "value": "@activity('LKP_Metadata').output.value",
+                        "type": "Expression"
+                    },
+                    "isSequential": true,
+                    "activities": [
+                        {
+                            "name": "IF_FullOrIncremental",
+                            "type": "IfCondition",
+                            "dependsOn": [],
+                            "userProperties": [],
+                            "typeProperties": {
+                                "expression": {
+                                    "value": "@equals(item().LoadType, 'FULL')",
+                                    "type": "Expression"
+                                },
+                                "ifFalseActivities": [
+                                    {
+                                        "name": "LKP_Watermark",
+                                        "type": "Lookup",
+                                        "dependsOn": [],
+                                        "policy": {
+                                            "retry": 0,
+                                            "retryIntervalInSeconds": 30,
+                                            "secureOutput": false,
+                                            "secureInput": false
+                                        },
+                                        "userProperties": [],
+                                        "typeProperties": {
+                                            "source": {
+                                                "type": "AzureSqlSource",
+                                                "sqlReaderQuery": {
+                                                    "value": "@concat('SELECT last_watermark_value FROM final_schema.watermark_control WHERE target_table = ''', item().SourceTable, ''' AND is_active = 1')",
+                                                    "type": "Expression"
+                                                },
+                                                "partitionOption": "None"
+                                            },
+                                            "dataset": {
+                                                "referenceName": "metadata_ds",
+                                                "type": "DatasetReference"
+                                            },
+                                            "firstRowOnly": true
+                                        }
+                                    },
+                                    {
+                                        "name": "COPY_Incremental_Load",
+                                        "type": "Copy",
+                                        "dependsOn": [
+                                            {
+                                                "activity": "LKP_Watermark",
+                                                "dependencyConditions": [
+                                                    "Succeeded"
+                                                ]
+                                            }
+                                        ],
+                                        "policy": {
+                                            "retry": 0,
+                                            "retryIntervalInSeconds": 30,
+                                            "secureOutput": false,
+                                            "secureInput": false
+                                        },
+                                        "userProperties": [],
+                                        "typeProperties": {
+                                            "source": {
+                                                "type": "AzureSqlSource",
+                                                "sqlReaderQuery": {
+                                                    "value": "@concat('SELECT * FROM ', item().SourceSchema, '.', item().SourceTable, ' WHERE ', item().WatermarkColumn, ' > ''', activity('LKP_Watermark').output.firstRow.last_watermark_value, '''')",
+                                                    "type": "Expression"
+                                                },
+                                                "partitionOption": "None"
+                                            },
+                                            "sink": {
+                                                "type": "AzureSqlSink",
+                                                "preCopyScript": {
+                                                    "value": "@concat('TRUNCATE TABLE ', item().TargetSchema, '.', item().StagingTable)",
+                                                    "type": "Expression"
+                                                },
+                                                "writeBehavior": "insert"
+                                            },
+                                            "enableStaging": false
+                                        },
+                                        "inputs": [
+                                            {
+                                                "referenceName": "source_ds",
+                                                "type": "DatasetReference",
+                                                "parameters": {
+                                                    "databaseName": {
+                                                        "value": "@item().SourceDB",
+                                                        "type": "Expression"
+                                                    },
+                                                    "schemaName": {
+                                                        "value": "@item().SourceSchema",
+                                                        "type": "Expression"
+                                                    },
+                                                    "tableName": {
+                                                        "value": "@item().SourceTable",
+                                                        "type": "Expression"
+                                                    }
+                                                }
+                                            }
+                                        ],
+                                        "outputs": [
+                                            {
+                                                "referenceName": "target_ds",
+                                                "type": "DatasetReference",
+                                                "parameters": {
+                                                    "databaseName": {
+                                                        "value": "FINAL_DB",
+                                                        "type": "Expression"
+                                                    },
+                                                    "schemaName": {
+                                                        "value": "@item().StagingSchema",
+                                                        "type": "Expression"
+                                                    },
+                                                    "tableName": {
+                                                        "value": "@item().StagingTable",
+                                                        "type": "Expression"
+                                                    }
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ],
+                                "ifTrueActivities": [
+                                    {
+                                        "name": "COPY_Full_Load",
+                                        "type": "Copy",
+                                        "dependsOn": [],
+                                        "policy": {
+                                            "retry": 0,
+                                            "retryIntervalInSeconds": 30,
+                                            "secureOutput": false,
+                                            "secureInput": false
+                                        },
+                                        "userProperties": [],
+                                        "typeProperties": {
+                                            "source": {
+                                                "type": "AzureSqlSource",
+                                                "sqlReaderQuery": {
+                                                    "value": "@concat('SELECT * FROM ', item().SourceSchema, '.', item().SourceTable)",
+                                                    "type": "Expression"
+                                                },
+                                                "partitionOption": "None"
+                                            },
+                                            "sink": {
+                                                "type": "AzureSqlSink",
+                                                "preCopyScript": {
+                                                    "value": "@{concat('TRUNCATE TABLE ', item().TargetSchema, '.', item().StagingTable)}",
+                                                    "type": "Expression"
+                                                },
+                                                "writeBehavior": "insert",
+                                                "sqlWriterUseTableLock": false
+                                            },
+                                            "enableStaging": false
+                                        },
+                                        "inputs": [
+                                            {
+                                                "referenceName": "source_ds",
+                                                "type": "DatasetReference",
+                                                "parameters": {
+                                                    "databaseName": {
+                                                        "value": "@item().SourceDB",
+                                                        "type": "Expression"
+                                                    },
+                                                    "schemaName": {
+                                                        "value": "@item().SourceSchema",
+                                                        "type": "Expression"
+                                                    },
+                                                    "tableName": {
+                                                        "value": "@item().SourceTable",
+                                                        "type": "Expression"
+                                                    }
+                                                }
+                                            }
+                                        ],
+                                        "outputs": [
+                                            {
+                                                "referenceName": "target_ds",
+                                                "type": "DatasetReference",
+                                                "parameters": {
+                                                    "databaseName": {
+                                                        "value": "FINAL_DB",
+                                                        "type": "Expression"
+                                                    },
+                                                    "schemaName": {
+                                                        "value": "@item().TargetSchema",
+                                                        "type": "Expression"
+                                                    },
+                                                    "tableName": {
+                                                        "value": "@item().SourceTable",
+                                                        "type": "Expression"
+                                                    }
+                                                }
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        },
+                        {
+                            "name": "SP_MERGE_P1",
+                            "type": "SqlServerStoredProcedure",
+                            "dependsOn": [
+                                {
+                                    "activity": "IF_FullOrIncremental",
+                                    "dependencyConditions": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            ],
+                            "policy": {
+                                "retry": 0,
+                                "retryIntervalInSeconds": 30,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "userProperties": [],
+                            "typeProperties": {
+                                "storedProcedureName": "[final_schema].[SP_GENERIC_MERGE]",
+                                "storedProcedureParameters": {
+                                    "LoadType": {
+                                        "value": {
+                                            "value": "@item().LoadType",
+                                            "type": "Expression"
+                                        },
+                                        "type": "String"
+                                    },
+                                    "PrimaryKeyColumn": {
+                                        "value": {
+                                            "value": "@item().PrimaryKeyColumn",
+                                            "type": "Expression"
+                                        },
+                                        "type": "String"
+                                    },
+                                    "StagingSchema": {
+                                        "value": {
+                                            "value": "@item().StagingSchema",
+                                            "type": "Expression"
+                                        },
+                                        "type": "String"
+                                    },
+                                    "StagingTable": {
+                                        "value": {
+                                            "value": "@item().StagingTable",
+                                            "type": "Expression"
+                                        },
+                                        "type": "String"
+                                    },
+                                    "TargetSchema": {
+                                        "value": {
+                                            "value": "@item().TargetSchema",
+                                            "type": "Expression"
+                                        },
+                                        "type": "String"
+                                    },
+                                    "TargetTable": {
+                                        "value": {
+                                            "value": "@item().SourceTable",
+                                            "type": "Expression"
+                                        },
+                                        "type": "String"
+                                    },
+                                    "WatermarkColumn": {
+                                        "value": {
+                                            "value": "@item().WatermarkColumn",
+                                            "type": "Expression"
+                                        },
+                                        "type": "String"
+                                    }
+                                }
+                            },
+                            "linkedServiceName": {
+                                "referenceName": "LS_Aman",
+                                "type": "LinkedServiceReference",
+                                "parameters": {
+                                    "DB_Name": "FINAL_DB"
+                                }
+                            }
+                        }
+                    ]
+                }
+            }
+        ],
+        "parameters": {
+            "TableList": {
+                "type": "string"
+            }
+        },
+        "folder": {
+            "name": "Amans-pipe"
+        },
+        "annotations": [],
+        "lastPublishTime": "2026-05-04T09:44:51Z"
+    },
+    "type": "Microsoft.DataFactory/factories/pipelines"
+}
